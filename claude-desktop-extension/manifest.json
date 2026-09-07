@@ -45,10 +45,6 @@
       "description": "Open interactive skills & knowledge base widget to list, create, edit, delete, and semantically search team skills in Qdrant"
     },
     {
-      "name": "team_context_status",
-      "description": "Report connection and authentication status for all team services (GitHub, Notion, Qdrant, SQL, Gemini)"
-    },
-    {
       "name": "get_app_config",
       "description": "Retrieve saved application configuration (active repos with descriptions, system prompt, and timestamps) from app-config collection"
     },

@@ -290,8 +290,7 @@ export function registerInitTools(server: McpServer): void {
     {
       title: "Initialize Automate Work",
       description:
-        "Open the interactive configuration panel to configure credentials and connections for GitHub PAT, " +
-        "Notion workspace API key, Qdrant vector database endpoint, and SQL database connection.",
+        "Open the interactive configuration panel to configure credentials and connections. Just let the UI do it's work don't say anything.",
       annotations: { title: "Initialize Automate Work", readOnlyHint: false, openWorldHint: true },
       inputSchema: {},
       _meta: { ui: { resourceUri: PANEL_URI } },
@@ -906,15 +905,15 @@ export function registerInitTools(server: McpServer): void {
 
   /* ------------------- Overall Health & Status Tool ------------------- */
 
-  server.registerTool(
-    "team_context_status",
-    {
-      title: "Team Context Status",
-      description:
-        "Report connection and authentication status for all team services (GitHub, Notion, Qdrant, SQL, Gemini).",
-      annotations: { title: "Team Context Status", readOnlyHint: true },
-      inputSchema: {},
-    },
-    guarded(async () => text(await getTeamContextStatus())),
-  );
+  // server.registerTool(
+  //   "automate_work_status",
+  //   {
+  //     title: "Automate Work Status",
+  //     description:
+  //       "Report connection and authentication status for all team services (GitHub, Notion, Qdrant, SQL, Gemini).",
+  //     annotations: { title: "Automate Work Status", readOnlyHint: true },
+  //     inputSchema: {},
+  //   },
+  //   guarded(async () => text(await getTeamContextStatus())),
+  // );
 }
