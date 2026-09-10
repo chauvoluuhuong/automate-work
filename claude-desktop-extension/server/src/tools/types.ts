@@ -470,3 +470,62 @@ export interface ToolTextResponse {
   isError?: boolean;
 }
 
+/* ------------------------------------------------------------------ *
+ * Notion Mutation & Comment Types
+ * ------------------------------------------------------------------ */
+
+export interface NotionCreatePageRecordResult {
+  id: string;
+  type: "page";
+  title: string;
+  url: string;
+  icon?: string | null;
+  cover?: string | null;
+  parent?: any;
+  created_time?: string | null;
+  last_edited_time?: string | null;
+  properties: Record<string, any>;
+  comment?: any;
+}
+
+export interface NotionUpdatePageResult {
+  id: string;
+  type: "page";
+  title: string;
+  url: string;
+  icon?: string | null;
+  cover?: string | null;
+  archived?: boolean;
+  parent?: any;
+  created_time?: string | null;
+  last_edited_time?: string | null;
+  properties: Record<string, any>;
+  comment?: any;
+}
+
+export interface NotionArchivePageResult {
+  success: boolean;
+  id: string;
+  archived: boolean;
+}
+
+export interface NotionCommentItem {
+  id: string;
+  parent?: any;
+  discussion_id?: string;
+  text: string;
+  rich_text?: any[];
+  author?: string;
+  author_id?: string | null;
+  author_avatar?: string | null;
+  created_time?: string | null;
+  last_edited_time?: string | null;
+}
+
+export interface NotionCommentsResult {
+  page_id: string;
+  comments: NotionCommentItem[];
+  count: number;
+}
+
+

@@ -257,6 +257,63 @@ assert.equal(fakeMcpServer.registeredTools.has("notion_filter_instruction"), fal
 assert.ok(fakeMcpServer.registeredTools.has("notion_get_page"), "registers notion_get_page");
 assert.ok(fakeMcpServer.registeredTools.has("notion_get_resource_content"), "registers notion_get_resource_content alias");
 assert.ok(fakeMcpServer.registeredTools.has("notion_search"), "registers notion_search");
+assert.ok(fakeMcpServer.registeredTools.has("notion_create_page_record"), "registers notion_create_page_record");
+assert.equal(fakeMcpServer.registeredTools.has("notion_create_page"), false, "does not expose notion_create_page");
+const createRecordTool = fakeMcpServer.registeredTools.get("notion_create_page_record");
+assert.ok(createRecordTool.def.description.includes("database"), "description states it creates record in database");
+assert.ok(fakeMcpServer.registeredTools.has("notion_update_page"), "registers notion_update_page");
+assert.ok(fakeMcpServer.registeredTools.has("notion_archive_page"), "registers notion_archive_page");
+assert.ok(fakeMcpServer.registeredTools.has("notion_create_comment"), "registers notion_create_comment");
+assert.ok(fakeMcpServer.registeredTools.has("notion_get_comments"), "registers notion_get_comments");
+
+// Notion conversion and validation tests
+const { markdownToBlocks, buildPageProperties, createPageRecordItem } = await import("../src/tools/notion.js");
+
+const testBlocks = markdownToBlocks("# Header 1\n\nSome paragraph with **bold** text.\n\n- Bullet item\n1. Numbered item\n> Blockquote\n```js\nconsole.log('hi');\n```");
+assert.ok(testBlocks.length >= 5, "markdown converted to blocks");
+assert.equal(testBlocks[0].type, "heading_1");
+assert.equal(testBlocks[0].heading_1.rich_text[0].text.content, "Header 1");
+assert.equal(testBlocks[1].type, "paragraph");
+assert.equal(testBlocks[2].type, "bulleted_list_item");
+assert.equal(testBlocks[3].type, "numbered_list_item");
+assert.equal(testBlocks[4].type, "quote");
+assert.equal(testBlocks[5].type, "code");
+
+const dummySchema: any = {
+  Title: { type: "title" },
+  Status: { type: "status" },
+  Tags: { type: "multi_select" },
+  Priority: { type: "select" },
+  Formula: { type: "formula" },
+};
+const builtProps = buildPageProperties(
+  {
+    Title: "New Task",
+    Status: "In Progress",
+    Tags: ["Bug", "Urgent"],
+    Priority: "High",
+    Formula: "computed",
+  },
+  dummySchema
+);
+assert.equal(builtProps.Title.title[0].text.content, "New Task");
+assert.equal(builtProps.Status.status.name, "In Progress");
+assert.equal(builtProps.Tags.multi_select.length, 2);
+assert.equal(builtProps.Priority.select.name, "High");
+assert.equal(builtProps.Formula, undefined, "read-only properties are excluded");
+
+await assert.rejects(
+  async () => {
+    await createPageRecordItem({
+      databaseId: "",
+      properties: { Name: "Missing DB" },
+    });
+  },
+  {
+    message: /databaseId is required/i,
+  },
+  "createPageRecordItem strictly requires databaseId"
+);
 
 // Notion Guide Skill tests
 const { getNotionGuideSkillPointId } = await import("../src/services/vector-db.js");
@@ -283,8 +340,14 @@ const sampleSkillContent = await buildNotionGuideSkillContent([
 assert.ok(sampleSkillContent.includes("# How to use Notion tools"), "skill title present");
 assert.ok(sampleSkillContent.includes("notion_get_page"), "references notion_get_page");
 assert.ok(sampleSkillContent.includes("notion_search"), "references notion_search");
+assert.ok(sampleSkillContent.includes("notion_create_page_record"), "references notion_create_page_record");
+assert.ok(sampleSkillContent.includes("notion_update_page"), "references notion_update_page");
+assert.ok(sampleSkillContent.includes("notion_archive_page"), "references notion_archive_page");
+assert.ok(sampleSkillContent.includes("notion_create_comment"), "references notion_create_comment");
+assert.ok(sampleSkillContent.includes("notion_get_comments"), "references notion_get_comments");
 assert.ok(sampleSkillContent.includes("Architecture RFC"), "includes active page");
 assert.ok(sampleSkillContent.includes("Engineering Roadmap"), "includes active database");
+assert.ok(sampleSkillContent.includes("How to Create Records"), "includes record creation section");
 assert.ok(sampleSkillContent.includes("Filter Instructions for \"Engineering Roadmap\""), "includes filter instructions section");
 
 // GitHub Guide Skill tests
@@ -345,6 +408,23 @@ assert.equal(parsedActivePages[0].title, "Untitled");
 assert.equal(parsedActivePages[1].id, "87654321-4321-4321-4321-cba987654321");
 assert.equal(parsedActivePages[1].type, "page");
 assert.equal(parsedActivePages[1].description, "Core product specification page");
+
+const syncGuideTool = configServer.registeredTools.get("config_sync_notion_guide_skill");
+assert.ok(syncGuideTool, "config_sync_notion_guide_skill tool registered");
+
+const { generateDatabaseJsonSchema } = await import("../src/tools/notion.js");
+const generatedJsonSchema = generateDatabaseJsonSchema({
+  title_property: "Task",
+  properties: [
+    { name: "Task", type: "title" },
+    { name: "Status", type: "status", options: [{ name: "Open" }, { name: "Closed" }] },
+    { name: "Progress", type: "formula" },
+  ],
+});
+assert.equal(generatedJsonSchema.type, "object");
+assert.equal(generatedJsonSchema.properties.Task.type, "string");
+assert.deepEqual(generatedJsonSchema.properties.Status.enum, ["Open", "Closed"]);
+assert.equal(generatedJsonSchema.properties.Progress.readOnly, true);
 
 const { getNotionSkillPointId, formatNotionSkillName } = await import(
   "../src/services/vector-db.js"

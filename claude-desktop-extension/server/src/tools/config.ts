@@ -872,6 +872,56 @@ export function registerConfigTools(server: McpServer): void {
     ),
   );
 
+  registerAppTool(
+    server,
+    "config_sync_notion_guide_skill",
+    {
+      title: "Sync Notion Guide Skill",
+      description:
+        "Internal: dynamically build and sync the 'How to use Notion tools' skill in Qdrant based on selected active Notion resources using instruction tools.",
+      annotations: { title: "Sync Notion Guide Skill", readOnlyHint: false },
+      inputSchema: {
+        username: z.string().optional().describe("User identity / username"),
+        activeNotionPages: z
+          .array(
+            z.object({
+              id: z.string().min(1),
+              title: z.string().optional().default("Untitled"),
+              url: z.string().optional().default(""),
+              description: z.string().optional().default(""),
+              lastEditedTime: z.string().optional().default(""),
+              icon: z.string().optional().default("📄"),
+              type: z.enum(["page", "database"]).optional().default("page"),
+            }),
+          )
+          .optional()
+          .describe("Active Notion resources"),
+      },
+      _meta: { ui: { visibility: ["app"] } },
+    },
+    guarded(
+      async ({
+        username: inputUsername,
+        activeNotionPages,
+      }: {
+        username?: string;
+        activeNotionPages?: ActiveNotionPageConfigItem[];
+      }) => {
+        const username = await resolveEffectiveUsername(inputUsername);
+        const skill = await syncNotionGuideSkill({
+          username,
+          activeNotionPages: activeNotionPages || [],
+        });
+        return text({
+          status: "ok",
+          skillName: skill?.name || "How to use Notion tools",
+          pointId: skill?.id,
+          content: skill?.content || "",
+        });
+      },
+    ),
+  );
+
   /* ------------------- Conversational Agent Tools ------------------- */
 
   server.registerTool(

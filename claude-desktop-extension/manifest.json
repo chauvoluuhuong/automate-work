@@ -109,6 +109,26 @@
       "description": "Deep search across Notion database properties, page bodies, and comments"
     },
     {
+      "name": "notion_create_page_record",
+      "description": "Create a new record (page) inside a selected Notion database with typed properties and markdown content. Standalone page creation is restricted."
+    },
+    {
+      "name": "notion_update_page",
+      "description": "Update properties and/or append markdown content to an existing Notion page or database record"
+    },
+    {
+      "name": "notion_archive_page",
+      "description": "Archive (soft-delete) or restore an existing Notion page or database record"
+    },
+    {
+      "name": "notion_create_comment",
+      "description": "Add a comment to an existing Notion page or block"
+    },
+    {
+      "name": "notion_get_comments",
+      "description": "Retrieve discussion comments from a Notion page or block"
+    },
+    {
       "name": "sql_check_connection",
       "description": "Test connectivity to SQL database"
     },

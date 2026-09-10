@@ -21,6 +21,11 @@ import type {
   NotionFilterInstructionsResult,
   NotionResourceContentResult,
   NotionSearchResult,
+  NotionCreatePageRecordResult,
+  NotionUpdatePageResult,
+  NotionArchivePageResult,
+  NotionCommentItem,
+  NotionCommentsResult,
 } from "./types.js";
 
 const NOTION_API = "https://api.notion.com/v1";
@@ -145,6 +150,27 @@ export const getComments = (blockId: string, cursor?: string, apiKeyOverride?: s
     undefined,
     apiKeyOverride,
   );
+
+export const createPage = (body: Record<string, any>, apiKeyOverride?: string) =>
+  notionRequest("POST", "/pages", body, apiKeyOverride);
+
+export const updatePage = (id: string, body: Record<string, any>, apiKeyOverride?: string) =>
+  notionRequest("PATCH", `/pages/${id.trim()}`, body, apiKeyOverride);
+
+export const appendBlockChildren = (blockId: string, children: any[], apiKeyOverride?: string) =>
+  notionRequest("PATCH", `/blocks/${blockId.trim()}/children`, { children }, apiKeyOverride);
+
+export const deleteBlock = (blockId: string, apiKeyOverride?: string) =>
+  notionRequest("DELETE", `/blocks/${blockId.trim()}`, undefined, apiKeyOverride);
+
+export const createComment = (body: Record<string, any>, apiKeyOverride?: string) =>
+  notionRequest("POST", "/comments", body, apiKeyOverride);
+
+export const createDatabase = (body: Record<string, any>, apiKeyOverride?: string) =>
+  notionRequest("POST", "/databases", body, apiKeyOverride);
+
+export const updateDatabase = (id: string, body: Record<string, any>, apiKeyOverride?: string) =>
+  notionRequest("PATCH", `/databases/${id.trim()}`, body, apiKeyOverride);
 
 /** Query every database in workspace. */
 export async function searchAllDatabases(apiKeyOverride?: string): Promise<any[]> {
@@ -2050,6 +2076,1061 @@ export async function notionCheckConnection(apiKeyOverride?: string): Promise<No
 }
 
 /* ------------------------------------------------------------------ *
+ * Notion Mutation Helpers & Block Parsers
+ * ------------------------------------------------------------------ */
+
+export const READ_ONLY_TYPES = new Set([
+  "formula",
+  "rollup",
+  "created_time",
+  "created_by",
+  "last_edited_time",
+  "last_edited_by",
+  "unique_id",
+  "button",
+]);
+
+export function markdownToRichText(input: unknown): any[] {
+  const text = String(input ?? "");
+  if (!text) return [];
+
+  const MAX_CHUNK = 1900;
+  if (text.length > MAX_CHUNK) {
+    const chunks: any[] = [];
+    for (let i = 0; i < text.length; i += MAX_CHUNK) {
+      chunks.push(...markdownToRichText(text.slice(i, i + MAX_CHUNK)));
+    }
+    return chunks;
+  }
+
+  const items: any[] = [];
+  const regex = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|~~[^~]+~~|\[[^\]]+\]\([^)]+\)|[^\*`~\[]+|.)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    const token = match[0];
+    if (!token) continue;
+
+    if (token.startsWith("**") && token.endsWith("**") && token.length >= 4) {
+      items.push({
+        type: "text",
+        text: { content: token.slice(2, -2) },
+        annotations: { bold: true },
+      });
+    } else if (token.startsWith("*") && token.endsWith("*") && token.length >= 2) {
+      items.push({
+        type: "text",
+        text: { content: token.slice(1, -1) },
+        annotations: { italic: true },
+      });
+    } else if (token.startsWith("`") && token.endsWith("`") && token.length >= 2) {
+      items.push({
+        type: "text",
+        text: { content: token.slice(1, -1) },
+        annotations: { code: true },
+      });
+    } else if (token.startsWith("~~") && token.endsWith("~~") && token.length >= 4) {
+      items.push({
+        type: "text",
+        text: { content: token.slice(2, -2) },
+        annotations: { strikethrough: true },
+      });
+    } else if (token.startsWith("[") && token.includes("](") && token.endsWith(")")) {
+      const closeBracket = token.indexOf("](");
+      const label = token.slice(1, closeBracket);
+      const url = token.slice(closeBracket + 2, -1);
+      items.push({
+        type: "text",
+        text: { content: label, link: { url } },
+      });
+    } else {
+      items.push({
+        type: "text",
+        text: { content: token },
+      });
+    }
+  }
+
+  return items.length > 0 ? items : [{ type: "text", text: { content: text } }];
+}
+
+export function markdownToBlocks(markdown: unknown): any[] {
+  if (!markdown || typeof markdown !== "string") return [];
+
+  const lines = markdown.split(/\r?\n/);
+  const blocks: any[] = [];
+  let inCodeBlock = false;
+  let codeLang = "plain text";
+  let codeLines: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (line.trim().startsWith("```")) {
+      if (!inCodeBlock) {
+        inCodeBlock = true;
+        codeLang = line.trim().slice(3).trim() || "plain text";
+        codeLines = [];
+        continue;
+      } else {
+        inCodeBlock = false;
+        blocks.push({
+          object: "block",
+          type: "code",
+          code: {
+            language: codeLang.toLowerCase(),
+            rich_text: [{ type: "text", text: { content: codeLines.join("\n") } }],
+          },
+        });
+        continue;
+      }
+    }
+
+    if (inCodeBlock) {
+      codeLines.push(line);
+      continue;
+    }
+
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    if (line.startsWith("# ")) {
+      blocks.push({
+        object: "block",
+        type: "heading_1",
+        heading_1: { rich_text: markdownToRichText(line.slice(2).trim()) },
+      });
+    } else if (line.startsWith("## ")) {
+      blocks.push({
+        object: "block",
+        type: "heading_2",
+        heading_2: { rich_text: markdownToRichText(line.slice(3).trim()) },
+      });
+    } else if (line.startsWith("### ")) {
+      blocks.push({
+        object: "block",
+        type: "heading_3",
+        heading_3: { rich_text: markdownToRichText(line.slice(4).trim()) },
+      });
+    } else if (/^[-*]\s+\[([ xX])\]\s+(.*)$/.test(trimmed)) {
+      const match = trimmed.match(/^[-*]\s+\[([ xX])\]\s+(.*)$/);
+      const checked = match ? match[1].toLowerCase() === "x" : false;
+      blocks.push({
+        object: "block",
+        type: "to_do",
+        to_do: {
+          rich_text: markdownToRichText(match ? match[2] : ""),
+          checked,
+        },
+      });
+    } else if (/^[-*]\s+(.*)$/.test(trimmed)) {
+      const content = trimmed.replace(/^[-*]\s+/, "");
+      blocks.push({
+        object: "block",
+        type: "bulleted_list_item",
+        bulleted_list_item: { rich_text: markdownToRichText(content) },
+      });
+    } else if (/^\d+\.\s+(.*)$/.test(trimmed)) {
+      const content = trimmed.replace(/^\d+\.\s+/, "");
+      blocks.push({
+        object: "block",
+        type: "numbered_list_item",
+        numbered_list_item: { rich_text: markdownToRichText(content) },
+      });
+    } else if (/^(\*{3,}|-{3,}|_{3,})$/.test(trimmed)) {
+      blocks.push({
+        object: "block",
+        type: "divider",
+        divider: {},
+      });
+    } else if (trimmed.startsWith(">")) {
+      const quoteText = trimmed.replace(/^>\s*/, "");
+      blocks.push({
+        object: "block",
+        type: "quote",
+        quote: { rich_text: markdownToRichText(quoteText) },
+      });
+    } else {
+      blocks.push({
+        object: "block",
+        type: "paragraph",
+        paragraph: { rich_text: markdownToRichText(trimmed) },
+      });
+    }
+  }
+
+  if (inCodeBlock && codeLines.length > 0) {
+    blocks.push({
+      object: "block",
+      type: "code",
+      code: {
+        language: codeLang.toLowerCase(),
+        rich_text: [{ type: "text", text: { content: codeLines.join("\n") } }],
+      },
+    });
+  }
+
+  return blocks;
+}
+
+export function formatIcon(icon: unknown): any {
+  if (!icon) return null;
+  if (typeof icon === "string") {
+    const trimmed = icon.trim();
+    if (/^https?:\/\//i.test(trimmed)) {
+      return { type: "external", external: { url: trimmed } };
+    }
+    return { type: "emoji", emoji: trimmed };
+  }
+  if (typeof icon === "object" && icon !== null) {
+    const obj = icon as any;
+    if (obj.type === "emoji" && obj.emoji) return obj;
+    if (obj.type === "external" && obj.external?.url) return obj;
+    if (obj.emoji) return { type: "emoji", emoji: obj.emoji };
+    if (obj.url) return { type: "external", external: { url: obj.url } };
+  }
+  return null;
+}
+
+export function formatCover(cover: unknown): any {
+  if (!cover) return null;
+  if (typeof cover === "string") {
+    const trimmed = cover.trim();
+    if (/^https?:\/\//i.test(trimmed)) {
+      return { type: "external", external: { url: trimmed } };
+    }
+  }
+  if (typeof cover === "object" && cover !== null) {
+    const obj = cover as any;
+    if (obj.type === "external" && obj.external?.url) return obj;
+    const url = obj.url || obj.external?.url;
+    if (url) return { type: "external", external: { url } };
+  }
+  return null;
+}
+
+function isRawNotionProperty(val: any, propType?: string): boolean {
+  if (!val || typeof val !== "object" || Array.isArray(val)) return false;
+  if (propType && val[propType] !== undefined) return true;
+  const commonKeys = [
+    "title",
+    "rich_text",
+    "number",
+    "select",
+    "status",
+    "multi_select",
+    "date",
+    "people",
+    "relation",
+    "checkbox",
+    "url",
+    "email",
+    "phone_number",
+    "files",
+  ];
+  return commonKeys.some((k) => k in val);
+}
+
+export function buildPageProperties(
+  propertiesInput: Record<string, any> = {},
+  schemaProperties: any[] | Record<string, any> = [],
+  schemaLookup: any = {},
+): Record<string, any> {
+  const result: Record<string, any> = {};
+  if (!propertiesInput || typeof propertiesInput !== "object") return result;
+
+  const propList = Array.isArray(schemaProperties)
+    ? schemaProperties
+    : schemaProperties && typeof schemaProperties === "object"
+      ? Object.entries(schemaProperties).map(([name, val]) => ({ name, ...(val as any) }))
+      : [];
+
+  const propMap = new Map<string, any>();
+  for (const p of propList) {
+    if (p.name) propMap.set(p.name.toLowerCase(), p);
+    if (p.id) propMap.set(p.id.toLowerCase(), p);
+  }
+
+  for (const [key, rawVal] of Object.entries(propertiesInput)) {
+    const normKey = key.trim();
+    const propDef = propMap.get(normKey.toLowerCase());
+    const propType = propDef?.type;
+    const propName = propDef?.name || normKey;
+
+    if (propType && READ_ONLY_TYPES.has(propType)) {
+      continue;
+    }
+
+    if (isRawNotionProperty(rawVal, propType)) {
+      result[propName] = rawVal;
+      continue;
+    }
+
+    if (!propType) {
+      if (typeof rawVal === "boolean") {
+        result[propName] = { checkbox: rawVal };
+      } else if (typeof rawVal === "number") {
+        result[propName] = { number: rawVal };
+      } else if (Array.isArray(rawVal)) {
+        result[propName] = {
+          multi_select: rawVal.map((v: any) => ({ name: String(v?.name || v).trim() })),
+        };
+      } else if (normKey.toLowerCase() === "title" || normKey.toLowerCase() === "name") {
+        result[propName] = {
+          title: [{ type: "text", text: { content: String(rawVal ?? "") } }],
+        };
+      } else {
+        result[propName] = {
+          rich_text: markdownToRichText(rawVal),
+        };
+      }
+      continue;
+    }
+
+    switch (propType) {
+      case "title": {
+        const str = rawVal ? String(rawVal).trim() : "";
+        result[propName] = {
+          title: str ? [{ type: "text", text: { content: str } }] : [],
+        };
+        break;
+      }
+
+      case "rich_text": {
+        const str = rawVal ? String(rawVal) : "";
+        result[propName] = {
+          rich_text: str ? markdownToRichText(str) : [],
+        };
+        break;
+      }
+
+      case "number": {
+        if (rawVal === null || rawVal === undefined || rawVal === "") {
+          result[propName] = { number: null };
+        } else {
+          const num = Number(rawVal);
+          result[propName] = { number: Number.isNaN(num) ? null : num };
+        }
+        break;
+      }
+
+      case "checkbox": {
+        const bool = Boolean(rawVal && rawVal !== "false" && rawVal !== "0");
+        result[propName] = { checkbox: bool };
+        break;
+      }
+
+      case "select": {
+        if (!rawVal || rawVal === "none" || rawVal === "null") {
+          result[propName] = { select: null };
+        } else {
+          const name = typeof rawVal === "object" ? rawVal.name || rawVal.id : String(rawVal).trim();
+          result[propName] = { select: { name } };
+        }
+        break;
+      }
+
+      case "status": {
+        if (!rawVal || rawVal === "none" || rawVal === "null") {
+          result[propName] = { status: null };
+        } else {
+          const name = typeof rawVal === "object" ? rawVal.name || rawVal.id : String(rawVal).trim();
+          result[propName] = { status: { name } };
+        }
+        break;
+      }
+
+      case "multi_select": {
+        if (!rawVal || rawVal === "none" || (Array.isArray(rawVal) && rawVal.length === 0)) {
+          result[propName] = { multi_select: [] };
+        } else {
+          const arr = Array.isArray(rawVal) ? rawVal : [rawVal];
+          result[propName] = {
+            multi_select: arr
+              .map((item) => {
+                const name = typeof item === "object" ? item?.name || item?.id : String(item).trim();
+                return name ? { name } : null;
+              })
+              .filter(Boolean),
+          };
+        }
+        break;
+      }
+
+      case "date": {
+        if (!rawVal || rawVal === "none" || rawVal === "null") {
+          result[propName] = { date: null };
+        } else if (typeof rawVal === "string") {
+          result[propName] = { date: { start: rawVal.trim() } };
+        } else if (typeof rawVal === "object" && rawVal !== null) {
+          result[propName] = {
+            date: {
+              start: rawVal.start || rawVal.date,
+              end: rawVal.end || null,
+            },
+          };
+        }
+        break;
+      }
+
+      case "people": {
+        if (!rawVal || rawVal === "none" || (Array.isArray(rawVal) && rawVal.length === 0)) {
+          result[propName] = { people: [] };
+        } else {
+          const arr = Array.isArray(rawVal) ? rawVal : [rawVal];
+          const userList = propDef?.users || schemaLookup?.people_by_property?.[propName] || [];
+          const userIds: string[] = [];
+
+          for (const item of arr) {
+            if (!item) continue;
+            if (typeof item === "object" && item.id) {
+              userIds.push(item.id);
+            } else {
+              const term = String(item).trim();
+              if (isUuid(term)) {
+                userIds.push(dashedUuid(term));
+              } else {
+                const matched = resolveValues(term, userList);
+                if (matched.length > 0) userIds.push(matched[0]);
+              }
+            }
+          }
+
+          result[propName] = {
+            people: userIds.map((id) => ({ id })),
+          };
+        }
+        break;
+      }
+
+      case "relation": {
+        if (!rawVal || rawVal === "none" || (Array.isArray(rawVal) && rawVal.length === 0)) {
+          result[propName] = { relation: [] };
+        } else {
+          const arr = Array.isArray(rawVal) ? rawVal : [rawVal];
+          const relationList = propDef?.targets || schemaLookup?.relations_by_property?.[propName] || [];
+          const relationIds: string[] = [];
+
+          for (const item of arr) {
+            if (!item) continue;
+            if (typeof item === "object" && item.id) {
+              relationIds.push(item.id);
+            } else {
+              const term = String(item).trim();
+              if (isUuid(term)) {
+                relationIds.push(dashedUuid(term));
+              } else {
+                const matched = resolveValues(term, relationList);
+                if (matched.length > 0) relationIds.push(matched[0]);
+              }
+            }
+          }
+
+          result[propName] = {
+            relation: relationIds.map((id) => ({ id })),
+          };
+        }
+        break;
+      }
+
+      case "url": {
+        result[propName] = { url: rawVal ? String(rawVal).trim() : null };
+        break;
+      }
+
+      case "email": {
+        result[propName] = { email: rawVal ? String(rawVal).trim() : null };
+        break;
+      }
+
+      case "phone_number": {
+        result[propName] = { phone_number: rawVal ? String(rawVal).trim() : null };
+        break;
+      }
+
+      default:
+        result[propName] = rawVal;
+        break;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * High-level creation of a page record inside a selected Notion database.
+ * Enforces that items must belong to a database (does not allow arbitrary standalone pages).
+ */
+export async function createPageRecordItem({
+  databaseId,
+  properties = {},
+  title,
+  content,
+  markdown,
+  children = [],
+  icon,
+  cover,
+  comment,
+  apiKeyOverride,
+}: {
+  databaseId?: string;
+  properties?: Record<string, any>;
+  title?: string;
+  content?: string;
+  markdown?: string;
+  children?: any[];
+  icon?: string;
+  cover?: string;
+  comment?: string | { text?: string; content?: string };
+  apiKeyOverride?: string;
+}): Promise<NotionCreatePageRecordResult> {
+  if (!databaseId || typeof databaseId !== "string" || !databaseId.trim()) {
+    throw new RepoContextError(
+      "databaseId is required to create a Notion page record. Standalone page creation is not allowed; records must belong to an active database.",
+    );
+  }
+  const resolvedDb = await resolveDatabaseId(databaseId.trim(), { apiKeyOverride });
+  if (!resolvedDb) {
+    throw new RepoContextError(
+      "databaseId is required to create a Notion page record. Standalone page creation is not allowed; records must belong to an active database.",
+    );
+  }
+
+  const finalParent = { database_id: dashedUuid(resolvedDb) };
+  let schema: any = null;
+  try {
+    schema = await getDatabaseSchema(resolvedDb, { apiKeyOverride });
+  } catch {
+    schema = null;
+  }
+
+  const propsToFormat = { ...properties };
+  if (title !== undefined && title !== null) {
+    const titlePropName = schema?.title_property || "Name";
+    if (!propsToFormat[titlePropName] && !propsToFormat.title && !propsToFormat.Name) {
+      propsToFormat[titlePropName] = title;
+    }
+  }
+
+  const formattedProps = buildPageProperties(propsToFormat, schema?.properties || [], schema || {});
+
+  const bodyText = content || markdown;
+  const blockChildren = [...children];
+  if (bodyText) {
+    blockChildren.push(...markdownToBlocks(bodyText));
+  }
+
+  const payload: Record<string, any> = {
+    parent: finalParent,
+    properties: formattedProps,
+  };
+
+  if (blockChildren.length > 0) {
+    payload.children = blockChildren;
+  }
+
+  const formattedIcon = formatIcon(icon);
+  if (formattedIcon) payload.icon = formattedIcon;
+
+  const formattedCover = formatCover(cover);
+  if (formattedCover) payload.cover = formattedCover;
+
+  const created = await createPage(payload, apiKeyOverride);
+
+  let createdComment = null;
+  const commentText = typeof comment === "string" ? comment : (comment?.text || comment?.content);
+  if (commentText) {
+    try {
+      createdComment = await createPageComment(created.id, { text: commentText, apiKeyOverride });
+    } catch (commentErr: any) {
+      console.error(`Failed to add initial comment on created record ${created.id}:`, commentErr?.message);
+    }
+  }
+
+  const createdProps: Record<string, any> = {};
+  for (const [pName, pVal] of Object.entries(created.properties || {})) {
+    createdProps[pName] = readProperty(pVal);
+  }
+
+  return {
+    id: dashedUuid(created.id),
+    type: "page",
+    title: extractTitle(created),
+    url: created.url || `https://app.notion.com/${created.id.replace(/-/g, "")}`,
+    icon: extractIcon(created.icon),
+    cover: extractCover(created.cover),
+    parent: created.parent || null,
+    created_time: created.created_time || null,
+    last_edited_time: created.last_edited_time || null,
+    properties: createdProps,
+    comment: createdComment,
+  };
+}
+
+/**
+ * High-level editing / updating of an existing page or database record.
+ */
+export async function updatePageItem(
+  pageIdOrUrl: string,
+  {
+    properties = {},
+    title,
+    content,
+    markdown,
+    appendContent,
+    children = [],
+    icon,
+    cover,
+    archived,
+    comment,
+    apiKeyOverride,
+  }: {
+    properties?: Record<string, any>;
+    title?: string;
+    content?: string;
+    markdown?: string;
+    appendContent?: string;
+    children?: any[];
+    icon?: string;
+    cover?: string;
+    archived?: boolean;
+    comment?: string | { text?: string; content?: string };
+    apiKeyOverride?: string;
+  } = {},
+): Promise<NotionUpdatePageResult> {
+  const pageId = await resolveResourceId(pageIdOrUrl, apiKeyOverride);
+  const rawPage = await getPage(pageId, apiKeyOverride);
+
+  let schema: any = null;
+  if (rawPage.parent?.type === "database_id") {
+    try {
+      schema = await getDatabaseSchema(rawPage.parent.database_id, { apiKeyOverride });
+    } catch {
+      schema = null;
+    }
+  }
+
+  const propsToFormat = { ...properties };
+  if (title !== undefined && title !== null) {
+    const titlePropName = schema?.title_property || "Name";
+    if (!propsToFormat[titlePropName] && !propsToFormat.title && !propsToFormat.Name) {
+      propsToFormat[titlePropName] = title;
+    }
+  }
+
+  const schemaProps =
+    schema?.properties ||
+    Object.entries(rawPage.properties || {}).map(([name, p]: [string, any]) => ({
+      name,
+      type: p.type,
+      id: p.id,
+    }));
+
+  const formattedProps = buildPageProperties(propsToFormat, schemaProps, schema || {});
+
+  const updatePayload: Record<string, any> = {};
+  if (Object.keys(formattedProps).length > 0) {
+    updatePayload.properties = formattedProps;
+  }
+
+  if (typeof archived === "boolean") {
+    updatePayload.archived = archived;
+  }
+
+  if (icon !== undefined) {
+    updatePayload.icon = formatIcon(icon);
+  }
+
+  if (cover !== undefined) {
+    updatePayload.cover = formatCover(cover);
+  }
+
+  let updatedPage = rawPage;
+  if (Object.keys(updatePayload).length > 0) {
+    updatedPage = await updatePage(pageId, updatePayload, apiKeyOverride);
+  }
+
+  const bodyText = appendContent || content || markdown;
+  const blockChildren = [...children];
+  if (bodyText) {
+    blockChildren.push(...markdownToBlocks(bodyText));
+  }
+
+  if (blockChildren.length > 0) {
+    await appendBlockChildren(pageId, blockChildren, apiKeyOverride);
+  }
+
+  let createdComment = null;
+  const commentText = typeof comment === "string" ? comment : (comment?.text || comment?.content);
+  if (commentText) {
+    try {
+      createdComment = await createPageComment(pageId, { text: commentText, apiKeyOverride });
+    } catch (commentErr: any) {
+      console.error(`Failed to add comment on updated page ${pageId}:`, commentErr?.message);
+    }
+  }
+
+  const updatedProps: Record<string, any> = {};
+  for (const [pName, pVal] of Object.entries(updatedPage.properties || {})) {
+    updatedProps[pName] = readProperty(pVal);
+  }
+
+  return {
+    id: dashedUuid(updatedPage.id),
+    type: "page",
+    title: extractTitle(updatedPage),
+    url: updatedPage.url || `https://app.notion.com/${updatedPage.id.replace(/-/g, "")}`,
+    icon: extractIcon(updatedPage.icon),
+    cover: extractCover(updatedPage.cover),
+    archived: Boolean(updatedPage.archived),
+    parent: updatedPage.parent || null,
+    created_time: updatedPage.created_time || null,
+    last_edited_time: updatedPage.last_edited_time || null,
+    properties: updatedProps,
+    comment: createdComment,
+  };
+}
+
+/**
+ * Archive (soft-delete) a page record or item in Notion.
+ */
+export async function archivePageItem(
+  pageIdOrUrl: string,
+  apiKeyOverride?: string,
+): Promise<NotionArchivePageResult> {
+  const pageId = await resolveResourceId(pageIdOrUrl, apiKeyOverride);
+  const res = await updatePage(pageId, { archived: true }, apiKeyOverride);
+  return {
+    success: true,
+    id: dashedUuid(res.id),
+    archived: Boolean(res.archived),
+  };
+}
+
+/**
+ * Retrieve all unresolved comments for a page or block.
+ */
+export async function getPageComments(
+  pageIdOrUrl: string,
+  apiKeyOverride?: string,
+): Promise<NotionCommentsResult> {
+  const pageId = await resolveResourceId(pageIdOrUrl, apiKeyOverride);
+  const comments: NotionCommentItem[] = [];
+  let cursor: string | undefined = undefined;
+
+  do {
+    const res = await getComments(pageId, cursor, apiKeyOverride);
+    for (const c of res.results || []) {
+      const text = (c.rich_text || [])
+        .map((t: any) => t.plain_text || t.text?.content || "")
+        .join("");
+      comments.push({
+        id: c.id,
+        parent: c.parent,
+        discussion_id: c.discussion_id,
+        text,
+        rich_text: c.rich_text,
+        author: c.created_by?.name || (c.created_by?.type === "person" ? "User" : "Notion User"),
+        author_id: c.created_by?.id || null,
+        author_avatar: c.created_by?.avatar_url || null,
+        created_time: c.created_time || null,
+        last_edited_time: c.last_edited_time || null,
+      });
+    }
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+
+  comments.sort((a, b) => String(a.created_time || "").localeCompare(String(b.created_time || "")));
+
+  return {
+    page_id: dashedUuid(pageId),
+    comments,
+    count: comments.length,
+  };
+}
+
+/**
+ * Post a new comment to a page or reply to a discussion thread.
+ */
+export async function createPageComment(
+  pageIdOrUrl?: string,
+  options: {
+    text?: string;
+    content?: string;
+    markdown?: string;
+    richText?: any[];
+    discussionId?: string;
+    apiKeyOverride?: string;
+  } = {},
+): Promise<NotionCommentItem> {
+  const bodyText = options.text || options.content || options.markdown;
+  let richTextPayload = options.richText;
+  if (!richTextPayload && bodyText) {
+    richTextPayload = markdownToRichText(bodyText);
+  }
+  if (!richTextPayload || richTextPayload.length === 0) {
+    throw new RepoContextError("Comment text cannot be empty.");
+  }
+
+  const payload: Record<string, any> = {
+    rich_text: richTextPayload,
+  };
+
+  if (options.discussionId) {
+    payload.discussion_id = options.discussionId;
+  } else {
+    if (!pageIdOrUrl) {
+      throw new RepoContextError("pageId is required when discussionId is not provided.");
+    }
+    const pageId = await resolveResourceId(pageIdOrUrl, options.apiKeyOverride);
+    payload.parent = {
+      type: "page_id",
+      page_id: dashedUuid(pageId),
+    };
+  }
+
+  const res = await createComment(payload, options.apiKeyOverride);
+  const plain = (res.rich_text || [])
+    .map((t: any) => t.plain_text || t.text?.content || "")
+    .join("");
+
+  return {
+    id: res.id,
+    parent: res.parent,
+    discussion_id: res.discussion_id,
+    text: plain,
+    rich_text: res.rich_text,
+    author: res.created_by?.name || (res.created_by?.type === "person" ? "User" : "Notion User"),
+    author_id: res.created_by?.id || null,
+    author_avatar: res.created_by?.avatar_url || null,
+    created_time: res.created_time || null,
+    last_edited_time: res.last_edited_time || null,
+  };
+}
+
+/**
+ * Generate standard JSON Schema describing database items based on schema properties.
+ */
+export function generateDatabaseJsonSchema(schema: any): Record<string, any> {
+  const properties: Record<string, any> = {};
+  const required: string[] = [];
+  const titlePropName = schema?.title_property || "Name";
+
+  for (const p of schema?.properties || []) {
+    const isTitle = p.name === titlePropName || p.type === "title";
+    const isReadOnly = READ_ONLY_TYPES.has(p.type);
+
+    if (isTitle) {
+      properties[p.name] = {
+        type: "string",
+        description: "Primary title property of the item. Required on creation, editable.",
+      };
+      required.push(p.name);
+    } else if (isReadOnly) {
+      properties[p.name] = {
+        readOnly: true,
+        description: `READ-ONLY: Computed ${p.type} property. Do NOT send in create or edit requests.`,
+      };
+    } else if (p.type === "status" || p.type === "select") {
+      const opts = (p.options || []).map((o: any) => o.name);
+      properties[p.name] = {
+        type: "string",
+        ...(opts.length > 0 ? { enum: opts } : {}),
+        description: `${p.type} dropdown option. Editable.`,
+      };
+    } else if (p.type === "multi_select") {
+      const opts = (p.options || []).map((o: any) => o.name);
+      properties[p.name] = {
+        type: "array",
+        items: {
+          type: "string",
+          ...(opts.length > 0 ? { enum: opts } : {}),
+        },
+        description: "Multi-select tags. Pass array of valid option names. Editable.",
+      };
+    } else if (p.type === "people") {
+      const users = (p.users || schema?.people_by_property?.[p.name] || [])
+        .map((u: any) => u.name || u.label)
+        .filter(Boolean);
+      properties[p.name] = {
+        type: "array",
+        items: {
+          type: "string",
+          ...(users.length > 0 ? { enum: users } : {}),
+        },
+        description: "Assignee: Workspace user name or email. Editable.",
+      };
+    } else if (p.type === "relation") {
+      const targets = (p.targets || schema?.relations_by_property?.[p.name] || [])
+        .map((t: any) => t.title || t.label)
+        .filter(Boolean);
+      properties[p.name] = {
+        type: "array",
+        items: {
+          type: "string",
+          ...(targets.length > 0 ? { enum: targets } : {}),
+        },
+        description: "Linked relation item titles. Editable.",
+      };
+    } else if (p.type === "number") {
+      properties[p.name] = {
+        type: "number",
+        description: "Numeric value. Editable.",
+      };
+    } else if (p.type === "checkbox") {
+      properties[p.name] = {
+        type: "boolean",
+        description: "Boolean checkbox flag. Editable.",
+      };
+    } else if (p.type === "date") {
+      properties[p.name] = {
+        type: "string",
+        description: "Date in YYYY-MM-DD format. Editable.",
+      };
+    } else if (p.type === "rich_text") {
+      properties[p.name] = {
+        type: "string",
+        description: "Text content with optional inline markdown. Editable.",
+      };
+    } else {
+      properties[p.name] = {
+        type: "string",
+        description: `${p.type} property. Editable.`,
+      };
+    }
+  }
+
+  return {
+    type: "object",
+    properties,
+    required,
+  };
+}
+
+/**
+ * Self-describing schema, action instructions, and examples for a database.
+ */
+export async function getDatabaseInstructions(options?: {
+  databaseId?: string;
+  refresh?: boolean;
+  apiKeyOverride?: string;
+}): Promise<any> {
+  const resolvedDbId = await resolveDatabaseId(options?.databaseId, options);
+  const schema = await getDatabaseSchema(resolvedDbId, options);
+  const db = schema.database;
+  const titlePropName = schema.title_property || "Name";
+
+  const sampleCreateProps: Record<string, any> = {};
+  const sampleEditProps: Record<string, any> = {};
+
+  for (const p of schema.properties || []) {
+    if (READ_ONLY_TYPES.has(p.type)) continue;
+
+    if (p.name === titlePropName || p.type === "title") {
+      sampleCreateProps[p.name] = "New task item";
+    } else if (p.type === "status" && p.options?.[0]) {
+      sampleCreateProps[p.name] = p.options[0].name;
+      if (p.options[1]) sampleEditProps[p.name] = p.options[1].name;
+    } else if (p.type === "select" && p.options?.[0]) {
+      sampleCreateProps[p.name] = p.options[0].name;
+      if (p.options[1]) sampleEditProps[p.name] = p.options[1].name;
+    } else if (p.type === "multi_select" && p.options?.[0]) {
+      sampleCreateProps[p.name] = [p.options[0].name];
+    } else if (p.type === "number") {
+      sampleCreateProps[p.name] = 10;
+      sampleEditProps[p.name] = 15;
+    } else if (p.type === "checkbox") {
+      sampleCreateProps[p.name] = false;
+      sampleEditProps[p.name] = true;
+    } else if (p.type === "date") {
+      sampleCreateProps[p.name] = new Date().toISOString().slice(0, 10);
+    } else if (p.type === "people") {
+      const users = (p.users || schema.people_by_property?.[p.name] || [])
+        .map((u: any) => u.name || u.label)
+        .filter(Boolean);
+      if (users[0]) sampleCreateProps[p.name] = users[0];
+    } else if (p.type === "relation") {
+      const targets = (p.targets || schema.relations_by_property?.[p.name] || [])
+        .map((t: any) => t.title || t.label)
+        .filter(Boolean);
+      if (targets[0]) sampleCreateProps[p.name] = targets[0];
+    }
+  }
+
+  const sampleFilters: Record<string, any> = {};
+  for (const p of schema.properties || []) {
+    if (p.type === "status" && p.options?.[0]) {
+      sampleFilters[p.name] = p.options[0].name;
+      break;
+    }
+    if (p.type === "select" && p.options?.[0]) {
+      sampleFilters[p.name] = p.options[0].name;
+      break;
+    }
+  }
+
+  const filtersInfo = await filterInstructions(options);
+
+  return {
+    database: {
+      id: db.id,
+      name: db.title,
+      title_property: titlePropName,
+    },
+    object_schema: generateDatabaseJsonSchema(schema),
+    properties: schema.properties,
+    actions: {
+      create_record: {
+        tool: "notion_create_page_record",
+        description: `Create a new record in "${db.title}". Requires title property "${titlePropName}".`,
+        example: {
+          databaseId: db.id,
+          properties: sampleCreateProps,
+          content: "## Description\\nInitial record details created via assistant.",
+          icon: "🎯",
+          comment: "Initial review requested 🚀",
+        },
+      },
+      update_record: {
+        tool: "notion_update_page",
+        description: `Update fields of a record in "${db.title}". Sparse object, pass null to clear.`,
+        example: {
+          pageId: "<record-id>",
+          properties: sampleEditProps,
+          content: "- Progress updated via assistant",
+        },
+      },
+      search_records: {
+        tool: "notion_search",
+        description: `Search across properties, body content, and comments in "${db.title}".`,
+        example: {
+          databaseId: db.id,
+          searchText: "query",
+          filter: sampleFilters,
+        },
+      },
+      archive_record: {
+        tool: "notion_archive_page",
+        description: `Soft-delete / archive a record from "${db.title}".`,
+        example: {
+          pageId: "<record-id>",
+        },
+      },
+      comment_on_record: {
+        tool: "notion_create_comment",
+        description: "Post a discussion comment to a record.",
+        example: {
+          pageId: "<record-id>",
+          text: "Status verified and approved.",
+        },
+      },
+    },
+    filters: filtersInfo.filters,
+    examples: filtersInfo.examples,
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * MCP Server Tool Registration
  * ------------------------------------------------------------------ */
 
@@ -2236,5 +3317,228 @@ export function registerNotionTools(server: McpServer): void {
         return text(results);
       },
     ),
+  );
+
+  // 6. Create a page record in a database
+  server.registerTool(
+    "notion_create_page_record",
+    {
+      title: "Create Notion Page Record",
+      description:
+        "Create a new page record (row/item) in an active/selected Notion database. Specifically designed for structured database records; does not allow creating arbitrary standalone pages. Requires databaseId, properties conforming to the database schema, optional Markdown content/notes, and optional initial comment.",
+      annotations: { title: "Create Notion Page Record", readOnlyHint: false },
+      inputSchema: {
+        databaseId: z
+          .string()
+          .describe("Notion Database ID or name where the record will be created"),
+        properties: z
+          .record(z.string(), z.any())
+          .optional()
+          .describe(
+            "Item properties matching the database schema (e.g. { Name: 'Bug fix', Status: 'In Progress', Priority: 'High' })",
+          ),
+        title: z
+          .string()
+          .optional()
+          .describe("Shorthand for the primary title/name property of the record"),
+        content: z
+          .string()
+          .optional()
+          .describe("Optional Markdown body content parsed automatically into native Notion blocks"),
+        markdown: z
+          .string()
+          .optional()
+          .describe("Alias for content: Markdown body content to populate in the record"),
+        icon: z
+          .string()
+          .optional()
+          .describe("Optional icon emoji (e.g. '🎯', '🚀') or external image URL"),
+        cover: z
+          .string()
+          .optional()
+          .describe("Optional cover image URL"),
+        comment: z
+          .string()
+          .optional()
+          .describe("Optional initial discussion comment to post to the newly created record"),
+      },
+    },
+    guarded(
+      async (params: {
+        databaseId: string;
+        properties?: Record<string, any>;
+        title?: string;
+        content?: string;
+        markdown?: string;
+        icon?: string;
+        cover?: string;
+        comment?: string;
+      }) => {
+        const res = await createPageRecordItem(params);
+        return text(res);
+      },
+    ),
+  );
+
+  // 7. Update an existing page or database record
+  server.registerTool(
+    "notion_update_page",
+    {
+      title: "Update Notion Page or Record",
+      description:
+        "Update properties, title, icon, cover, or archive status of an existing Notion page or database record, and optionally append new Markdown body content or post a comment.",
+      annotations: { title: "Update Notion Page", readOnlyHint: false },
+      inputSchema: {
+        pageId: z
+          .string()
+          .describe("Notion Page ID, Database record ID, URL, or resource title to update"),
+        properties: z
+          .record(z.string(), z.any())
+          .optional()
+          .describe(
+            "Partial properties to update (e.g. { Status: 'Done', Priority: 'Low' }). Pass null or 'none' to clear a property.",
+          ),
+        title: z
+          .string()
+          .optional()
+          .describe("Optional updated title for the page or record"),
+        content: z
+          .string()
+          .optional()
+          .describe("Optional Markdown content to append as new blocks to the page body"),
+        appendContent: z
+          .string()
+          .optional()
+          .describe("Alias for content: Markdown content to append to the page body"),
+        icon: z
+          .string()
+          .optional()
+          .describe("Optional updated icon emoji or image URL"),
+        cover: z
+          .string()
+          .optional()
+          .describe("Optional updated cover image URL"),
+        archived: z
+          .boolean()
+          .optional()
+          .describe("Optional boolean: true to archive (move to trash), false to restore"),
+        comment: z
+          .string()
+          .optional()
+          .describe("Optional comment to post on the page during the update"),
+      },
+    },
+    guarded(
+      async ({
+        pageId,
+        properties,
+        title,
+        content,
+        appendContent,
+        icon,
+        cover,
+        archived,
+        comment,
+      }: {
+        pageId: string;
+        properties?: Record<string, any>;
+        title?: string;
+        content?: string;
+        appendContent?: string;
+        icon?: string;
+        cover?: string;
+        archived?: boolean;
+        comment?: string;
+      }) => {
+        const res = await updatePageItem(pageId, {
+          properties,
+          title,
+          content,
+          appendContent,
+          icon,
+          cover,
+          archived,
+          comment,
+        });
+        return text(res);
+      },
+    ),
+  );
+
+  // 8. Archive (soft-delete) a page or record
+  server.registerTool(
+    "notion_archive_page",
+    {
+      title: "Archive Notion Page or Record",
+      description: "Archive (soft-delete) a page record or item in Notion.",
+      annotations: { title: "Archive Notion Page", readOnlyHint: false },
+      inputSchema: {
+        pageId: z
+          .string()
+          .describe("Notion Page ID, database record ID, or URL to archive"),
+      },
+    },
+    guarded(async ({ pageId }: { pageId: string }) => {
+      const res = await archivePageItem(pageId);
+      return text(res);
+    }),
+  );
+
+  // 9. Post a comment to a page or record
+  server.registerTool(
+    "notion_create_comment",
+    {
+      title: "Create Notion Comment",
+      description:
+        "Post a discussion comment to a Notion page or database record, or reply to an existing comment thread.",
+      annotations: { title: "Create Notion Comment", readOnlyHint: false },
+      inputSchema: {
+        pageId: z
+          .string()
+          .optional()
+          .describe("Notion Page ID or record ID to comment on (required unless discussionId is given)"),
+        text: z
+          .string()
+          .describe("Comment text to post (Markdown supported: **bold**, *italic*, `code`, [link](url))"),
+        discussionId: z
+          .string()
+          .optional()
+          .describe("Optional discussion thread ID to post a reply to"),
+      },
+    },
+    guarded(
+      async ({
+        pageId,
+        text: commentText,
+        discussionId,
+      }: {
+        pageId?: string;
+        text: string;
+        discussionId?: string;
+      }) => {
+        const res = await createPageComment(pageId, { text: commentText, discussionId });
+        return text(res);
+      },
+    ),
+  );
+
+  // 10. Get all comments for a page or record
+  server.registerTool(
+    "notion_get_comments",
+    {
+      title: "Get Notion Comments",
+      description:
+        "Retrieve all unresolved discussion comments and replies for a Notion page or database item.",
+      annotations: { title: "Get Notion Comments", readOnlyHint: true },
+      inputSchema: {
+        pageId: z
+          .string()
+          .describe("Notion Page ID, record ID, or URL to fetch comments for"),
+      },
+    },
+    guarded(async ({ pageId }: { pageId: string }) => {
+      const res = await getPageComments(pageId);
+      return text(res);
+    }),
   );
 }

@@ -3606,9 +3606,12 @@ Read through the skill (using \`get_skill\`) and find the relevant workflow befo
       <div class="card">
         <div class="card-header">
           <span class="card-title">📝 Select Active Notion Resources</span>
-          <span id="notionSummaryCount" style="font-size:12px;color:var(--muted);">
-            ${selectedSummary}
-          </span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span id="notionSummaryCount" style="font-size:12px;color:var(--muted);">
+              ${selectedSummary}
+            </span>
+            <span id="notionSyncStatusIndicator" style="font-size:11.5px;color:var(--muted);"></span>
+          </div>
         </div>
 
         <div id="notionTypeFilters" style="display:flex;gap:6px;margin:0 0 10px;align-items:center;flex-wrap:wrap;">
@@ -3659,17 +3662,60 @@ Read through the skill (using \`get_skill\`) and find the relevant workflow befo
         }
       });
       renderNotionSession(container);
+      window._syncNotionGuideSkill();
     });
 
     document.getElementById("clearAllNotionBtn")?.addEventListener("click", () => {
       state.selectedNotionPages.clear();
       renderNotionSession(container);
+      window._syncNotionGuideSkill();
     });
 
     document.getElementById("refreshNotionBtn")?.addEventListener("click", () => {
       window._refreshNotionPages();
     });
   }
+
+  let _syncNotionSkillTimeout = null;
+  window._syncNotionGuideSkill = function() {
+    if (_syncNotionSkillTimeout) clearTimeout(_syncNotionSkillTimeout);
+    const indicator = document.getElementById("notionSyncStatusIndicator");
+    if (indicator) {
+      indicator.style.display = "inline-block";
+      indicator.innerHTML = '<span class="spinner-sm"></span> Syncing Notion skill…';
+      indicator.style.color = "var(--muted)";
+    }
+    _syncNotionSkillTimeout = setTimeout(async () => {
+      try {
+        const activeNotionPages = Array.from(state.selectedNotionPages.values()).map(n => ({
+          id: n.id,
+          title: n.title || (n.type === "database" ? "Untitled Database" : "Untitled Page"),
+          url: n.url || "",
+          description: n.description || "",
+          lastEditedTime: n.lastEditedTime || "",
+          icon: n.icon || (n.type === "database" ? "🗄️" : "📄"),
+          type: n.type === "database" ? "database" : "page",
+        }));
+        const res = await app.callServerTool({
+          name: "config_sync_notion_guide_skill",
+          arguments: {
+            username: state.currentUser?.name || "admin",
+            activeNotionPages,
+          },
+        });
+        const data = JSON.parse(res.content[0].text);
+        if (indicator) {
+          indicator.innerHTML = `✓ "${data.skillName}" synced to Qdrant`;
+          indicator.style.color = "var(--ok-fg)";
+        }
+      } catch (err) {
+        if (indicator) {
+          indicator.innerHTML = `⚠️ Skill sync: ${err.message}`;
+          indicator.style.color = "var(--err-fg)";
+        }
+      }
+    }, 350);
+  };
 
   window._setNotionTypeFilter = function(filter) {
     state.notionResourceTypeFilter = filter;
@@ -3701,6 +3747,7 @@ Read through the skill (using \`get_skill\`) and find the relevant workflow befo
     }
     const subContent = document.getElementById("subSessionContent");
     if (subContent && state.activeSubSession === "notion") renderNotionSession(subContent);
+    window._syncNotionGuideSkill();
   };
 
   window._updateNotionDesc = function(pageId, desc) {
@@ -3708,6 +3755,7 @@ Read through the skill (using \`get_skill\`) and find the relevant workflow befo
     if (item) {
       item.description = desc;
       state.selectedNotionPages.set(pageId, item);
+      window._syncNotionGuideSkill();
     }
   };
 

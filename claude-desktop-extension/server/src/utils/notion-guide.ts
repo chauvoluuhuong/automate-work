@@ -3,7 +3,7 @@
  */
 
 import type { ActiveNotionPageConfigItem, SkillItem } from "../tools/types.js";
-import { filterInstructions } from "../tools/notion.js";
+import { filterInstructions, getDatabaseInstructions } from "../tools/notion.js";
 import { upsertSkill, getNotionGuideSkillPointId } from "../services/vector-db.js";
 import { buildConnectionSkillName } from "./helpers.js";
 
@@ -21,13 +21,21 @@ export async function buildNotionGuideSkillContent(
   const lines: string[] = [
     `# ${skillName}`,
     "",
-    "This guide explains how to access, read, and query our team's active Notion workspace resources using the available Notion MCP tools.",
+    "This guide explains how to access, read, search, create, and update our team's active Notion workspace resources using the available Notion MCP tools.",
     "",
     "## Tool Reference",
+    "- `notion_list_resources`: Discover and list all accessible pages and databases across the workspace.",
     "- `notion_get_page`: Retrieve full Markdown content, blocks, inline databases, and comments for any Notion page or database.",
     "- `notion_search`: Deep schema-aware search across Notion database properties, page bodies, and comments with structured filtering and pagination.",
-    "- `notion_list_resources`: Discover and list all accessible pages and databases across the workspace.",
+    "- `notion_create_page_record`: Create a new page record (row/item) in an active/selected Notion database with structured properties, Markdown notes, icon, and optional initial comment.",
+    "- `notion_update_page`: Update properties, title, append Markdown body content, or archive an existing Notion page or database record.",
+    "- `notion_archive_page`: Archive (soft-delete) a page record or item in Notion.",
+    "- `notion_create_comment`: Post a discussion comment to a Notion page/item, or reply to an existing comment thread.",
+    "- `notion_get_comments`: Retrieve unresolved comments and discussion threads for a Notion page or database item.",
     "- `notion_check_connection`: Test connectivity to the Notion workspace.",
+    "",
+    "### Safety & Approvals",
+    "- Always ask for explicit user approval before executing actions that create, modify, or delete Notion data (`notion_create_page_record`, `notion_update_page`, `notion_archive_page`, `notion_create_comment`).",
     "",
   ];
 
@@ -39,6 +47,7 @@ export async function buildNotionGuideSkillContent(
       "- To discover accessible pages and databases in the workspace, call `notion_list_resources({ type: 'all' })`.",
       "- To read any page content, call `notion_get_page({ pageId: '<page-id>' })`.",
       "- To search across a database, call `notion_search({ databaseId: '<db-id>', searchText: '...' })`.",
+      "- To create a new record in a database, call `notion_create_page_record({ databaseId: '<db-id>', properties: { ... } })`.",
       "",
     );
     return lines.join("\n");
@@ -67,9 +76,17 @@ export async function buildNotionGuideSkillContent(
         lines.push(`- **URL**: [Open in Notion](${page.url})`);
       }
       lines.push(
-        `- **How to fetch content**:`,
+        `- **Fetch Page Content**:`,
         "  ```json",
         `  notion_get_page({ "pageId": "${page.id}" })`,
+        "  ```",
+        `- **Update or Append Notes**:`,
+        "  ```json",
+        `  notion_update_page({ "pageId": "${page.id}", "content": "## Implementation Update\\n- Completed review" })`,
+        "  ```",
+        `- **Add Page Comment**:`,
+        "  ```json",
+        `  notion_create_comment({ "pageId": "${page.id}", "text": "Reviewed and approved." })`,
         "  ```",
         "",
       );
@@ -80,7 +97,7 @@ export async function buildNotionGuideSkillContent(
   if (databases.length > 0) {
     lines.push(
       "### Active Databases",
-      "When searching tasks, sprints, roadmaps, or inventories, use the **`notion_search`** tool with the database ID. Use `filter` to narrow records by status, assignee, priority, or tags, and `searchText` for free-text search.",
+      "Active databases can be searched, queried, and updated with new records. Use **`notion_create_page_record`** to add structured items, **`notion_update_page`** to edit items or append notes, and **`notion_search`** to filter records.",
       "",
     );
 
@@ -96,26 +113,61 @@ export async function buildNotionGuideSkillContent(
       if (db.url) {
         lines.push(`- **URL**: [Open in Notion](${db.url})`);
       }
-      lines.push(
-        `- **Basic Search Example**:`,
-        "  ```json",
-        `  notion_search({ "databaseId": "${db.id}", "searchText": "search query" })`,
-        "  ```",
-        "",
-      );
+      lines.push("");
 
-      // Filter Instructions section for this database
-      lines.push(`##### Filter Instructions for "${title}"`);
       try {
-        const instructions = await filterInstructions({
+        const instructions = await getDatabaseInstructions({
           databaseId: db.id,
           apiKeyOverride,
         });
 
+        const titleProp = instructions?.database?.title_property || "Name";
+
+        // 1. Create Record Instructions
+        lines.push(
+          `##### 1. How to Create Records in "${title}" (\`notion_create_page_record\`)`,
+          `Use **\`notion_create_page_record\`** to create a new item/row in this database.`,
+          `- **Required Title Field**: \`${titleProp}\` (pass in \`properties\` or as \`title\`).`,
+          `- Standalone page creation is not permitted; records must specify \`databaseId: "${db.id}"\`.`,
+          "",
+        );
+
+        if (instructions?.actions?.create_record?.example) {
+          lines.push(
+            "**Example Tool Call:**",
+            "```json",
+            `notion_create_page_record(${JSON.stringify(instructions.actions.create_record.example, null, 2)})`,
+            "```",
+            "",
+          );
+        }
+
+        // 2. Edit / Update Instructions
+        lines.push(
+          `##### 2. How to Edit / Update Records in "${title}" (\`notion_update_page\`)`,
+          "Use **`notion_update_page`** with the record's `pageId` to edit properties or append Markdown notes to its body.",
+          "",
+        );
+
+        if (instructions?.actions?.update_record?.example) {
+          lines.push(
+            "**Example Tool Call:**",
+            "```json",
+            `notion_update_page(${JSON.stringify(instructions.actions.update_record.example, null, 2)})`,
+            "```",
+            "",
+          );
+        }
+
+        // 3. Search & Filter Instructions
+        lines.push(
+          `##### 3. How to Search & Filter "${title}" (\`notion_search\`)`,
+          "Use **`notion_search`** to query records with structured filters and free-text matching.",
+          "",
+        );
+
         if (instructions?.filters && Object.keys(instructions.filters).length > 0) {
           lines.push(
-            "Use the `filter` argument in `notion_search` to target specific properties. Below are the supported filter fields and accepted values for this database:",
-            "",
             "| Property Name | Filter Type | Accepted Values / Formats |",
             "| :--- | :--- | :--- |",
           );
@@ -133,7 +185,7 @@ export async function buildNotionGuideSkillContent(
         }
 
         if (instructions?.examples && instructions.examples.length > 0) {
-          lines.push("**Filter Query Examples**:", "");
+          lines.push("**Filter Query Examples:**", "");
           for (const ex of instructions.examples) {
             lines.push(`- *${ex.description}*:`);
             lines.push("  ```json");
@@ -142,9 +194,42 @@ export async function buildNotionGuideSkillContent(
           }
           lines.push("");
         }
+
+        // 4. Comment & Archive Instructions
+        lines.push(
+          `##### 4. Comments & Archiving for "${title}"`,
+          `- **Post Comment**: \`notion_create_comment({ "pageId": "<record-id>", "text": "Task completed!" })\``,
+          `- **Get Comments**: \`notion_get_comments({ "pageId": "<record-id>" })\``,
+          `- **Archive / Delete Record**: \`notion_archive_page({ "pageId": "<record-id>" })\``,
+          "",
+        );
       } catch (err: any) {
         lines.push(
-          `*(Filter instructions could not be fetched dynamically: ${err?.message || "Check Notion connectivity"})*`,
+          `*(Database schema could not be fetched dynamically: ${err?.message || "Check Notion connectivity"}. Showing standard instructions:)*`,
+          "",
+          `##### 1. How to Create Records in "${title}" (\`notion_create_page_record\`)`,
+          `Use **\`notion_create_page_record\`** to create a new item/row in this database.`,
+          `- Standalone page creation is not permitted; records must specify \`databaseId: "${db.id}"\`.`,
+          "```json",
+          `notion_create_page_record({\n  "databaseId": "${db.id}",\n  "properties": {\n    "Name": "New Record Title"\n  }\n})`,
+          "```",
+          "",
+          `##### 2. How to Update Records in "${title}" (\`notion_update_page\`)`,
+          `Use **\`notion_update_page\`** to update properties or append markdown content to a record in this database.`,
+          "```json",
+          `notion_update_page({\n  "pageId": "<record-id>",\n  "properties": {\n    "Status": "Done"\n  }\n})`,
+          "```",
+          "",
+          `##### 3. Filter Instructions for "${title}" (\`notion_search\`)`,
+          `Use **\`notion_search\`** with \`databaseId: "${db.id}"\` to query items in this database.`,
+          "```json",
+          `notion_search({\n  "databaseId": "${db.id}",\n  "query": "search query"\n})`,
+          "```",
+          "",
+          `##### 4. Comments & Archiving for "${title}"`,
+          `- **Post Comment**: \`notion_create_comment({ "pageId": "<record-id>", "text": "Task completed!" })\``,
+          `- **Get Comments**: \`notion_get_comments({ "pageId": "<record-id>" })\``,
+          `- **Archive / Delete Record**: \`notion_archive_page({ "pageId": "<record-id>" })\``,
           "",
         );
       }
