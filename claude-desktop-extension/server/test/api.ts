@@ -204,6 +204,8 @@ const {
   richTextToMarkdown,
   extractPageTitle,
   extractPageIcon,
+  dashedUuid,
+  isUuid,
 } = await import("../src/tools/notion.js");
 assert.equal((await validateNotionKey("")).valid, false, "empty Notion key fails");
 assert.equal((await notionCheckConnection()).connected, false, "unconfigured Notion reports disconnected");
@@ -231,6 +233,198 @@ assert.equal(
   "🎯",
   "extractPageIcon extracts emoji icon",
 );
+assert.equal(
+  dashedUuid("c1f7b889123456789abcdef012345678"),
+  "c1f7b889-1234-5678-9abc-def012345678",
+  "dashedUuid converts raw 32 hex to dashed format",
+);
+assert.equal(isUuid("c1f7b889-1234-5678-9abc-def012345678"), true, "isUuid detects valid UUID");
+
+// Tool registration verification
+const { registerNotionTools } = await import("../src/tools/notion.js");
+const fakeMcpServer: any = {
+  registeredTools: new Map<string, any>(),
+  registerTool(name: string, def: any, handler: any) {
+    this.registeredTools.set(name, { def, handler });
+  },
+};
+registerNotionTools(fakeMcpServer);
+assert.ok(fakeMcpServer.registeredTools.has("notion_check_connection"), "registers notion_check_connection");
+assert.ok(fakeMcpServer.registeredTools.has("notion_list_resources"), "registers notion_list_resources");
+assert.ok(fakeMcpServer.registeredTools.has("notion_list_resource"), "registers notion_list_resource alias");
+assert.equal(fakeMcpServer.registeredTools.has("notion_filter_instructions"), false, "does not expose notion_filter_instructions tool");
+assert.equal(fakeMcpServer.registeredTools.has("notion_filter_instruction"), false, "does not expose notion_filter_instruction tool");
+assert.ok(fakeMcpServer.registeredTools.has("notion_get_page"), "registers notion_get_page");
+assert.ok(fakeMcpServer.registeredTools.has("notion_get_resource_content"), "registers notion_get_resource_content alias");
+assert.ok(fakeMcpServer.registeredTools.has("notion_search"), "registers notion_search");
+assert.ok(fakeMcpServer.registeredTools.has("notion_create_page_record"), "registers notion_create_page_record");
+assert.equal(fakeMcpServer.registeredTools.has("notion_create_page"), false, "does not expose notion_create_page");
+const createRecordTool = fakeMcpServer.registeredTools.get("notion_create_page_record");
+assert.ok(createRecordTool.def.description.includes("database"), "description states it creates record in database");
+assert.ok(fakeMcpServer.registeredTools.has("notion_update_page"), "registers notion_update_page");
+assert.ok(fakeMcpServer.registeredTools.has("notion_archive_page"), "registers notion_archive_page");
+assert.ok(fakeMcpServer.registeredTools.has("notion_create_comment"), "registers notion_create_comment");
+assert.ok(fakeMcpServer.registeredTools.has("notion_get_comments"), "registers notion_get_comments");
+
+// Notion conversion and validation tests
+const { markdownToBlocks, buildPageProperties, createPageRecordItem } = await import("../src/tools/notion.js");
+
+const testBlocks = markdownToBlocks("# Header 1\n\nSome paragraph with **bold** text.\n\n- Bullet item\n1. Numbered item\n> Blockquote\n```js\nconsole.log('hi');\n```");
+assert.ok(testBlocks.length >= 5, "markdown converted to blocks");
+assert.equal(testBlocks[0].type, "heading_1");
+assert.equal(testBlocks[0].heading_1.rich_text[0].text.content, "Header 1");
+assert.equal(testBlocks[1].type, "paragraph");
+assert.equal(testBlocks[2].type, "bulleted_list_item");
+assert.equal(testBlocks[3].type, "numbered_list_item");
+assert.equal(testBlocks[4].type, "quote");
+assert.equal(testBlocks[5].type, "code");
+
+const dummySchema: any = {
+  Title: { type: "title" },
+  Status: { type: "status" },
+  Tags: { type: "multi_select" },
+  Priority: { type: "select" },
+  Formula: { type: "formula" },
+};
+const builtProps = buildPageProperties(
+  {
+    Title: "New Task",
+    Status: "In Progress",
+    Tags: ["Bug", "Urgent"],
+    Priority: "High",
+    Formula: "computed",
+  },
+  dummySchema
+);
+assert.equal(builtProps.Title.title[0].text.content, "New Task");
+assert.equal(builtProps.Status.status.name, "In Progress");
+assert.equal(builtProps.Tags.multi_select.length, 2);
+assert.equal(builtProps.Priority.select.name, "High");
+assert.equal(builtProps.Formula, undefined, "read-only properties are excluded");
+
+await assert.rejects(
+  async () => {
+    await createPageRecordItem({
+      databaseId: "",
+      properties: { Name: "Missing DB" },
+    });
+  },
+  {
+    message: /databaseId is required/i,
+  },
+  "createPageRecordItem strictly requires databaseId"
+);
+
+// Notion Guide Skill tests
+const { getNotionGuideSkillPointId } = await import("../src/services/vector-db.js");
+const guidePointId1 = getNotionGuideSkillPointId("alice");
+const guidePointId2 = getNotionGuideSkillPointId("ALICE");
+assert.equal(guidePointId1, guidePointId2, "notion guide point ID is deterministic and case-insensitive");
+assert.match(guidePointId1, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+const { buildNotionGuideSkillContent } = await import("../src/utils/notion-guide.js");
+const sampleSkillContent = await buildNotionGuideSkillContent([
+  {
+    id: "db-12345",
+    title: "Engineering Roadmap",
+    type: "database",
+    description: "Quarterly initiatives and status",
+  },
+  {
+    id: "page-67890",
+    title: "Architecture RFC",
+    type: "page",
+    description: "System design specs",
+  },
+]);
+assert.ok(sampleSkillContent.includes("# How to use Notion tools"), "skill title present");
+assert.ok(sampleSkillContent.includes("notion_get_page"), "references notion_get_page");
+assert.ok(sampleSkillContent.includes("notion_search"), "references notion_search");
+assert.ok(sampleSkillContent.includes("notion_create_page_record"), "references notion_create_page_record");
+assert.ok(sampleSkillContent.includes("notion_update_page"), "references notion_update_page");
+assert.ok(sampleSkillContent.includes("notion_archive_page"), "references notion_archive_page");
+assert.ok(sampleSkillContent.includes("notion_create_comment"), "references notion_create_comment");
+assert.ok(sampleSkillContent.includes("notion_get_comments"), "references notion_get_comments");
+assert.ok(sampleSkillContent.includes("Architecture RFC"), "includes active page");
+assert.ok(sampleSkillContent.includes("Engineering Roadmap"), "includes active database");
+assert.ok(sampleSkillContent.includes("How to Create Records"), "includes record creation section");
+assert.ok(sampleSkillContent.includes("Filter Instructions for \"Engineering Roadmap\""), "includes filter instructions section");
+
+// GitHub Guide Skill tests
+const { getGitHubGuideSkillPointId } = await import("../src/services/vector-db.js");
+const ghPointId1 = getGitHubGuideSkillPointId("alice");
+const ghPointId2 = getGitHubGuideSkillPointId("ALICE");
+assert.equal(ghPointId1, ghPointId2, "github guide point ID is deterministic and case-insensitive");
+assert.match(ghPointId1, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+const { buildGitHubGuideSkillContent } = await import("../src/utils/github-guide.js");
+const sampleGhSkillContent = await buildGitHubGuideSkillContent([
+  {
+    name: "acme/web-frontend",
+    description: "Core React and TypeScript web app",
+  },
+  {
+    name: "acme/backend-api",
+    description: "Go REST microservices",
+  },
+]);
+assert.ok(sampleGhSkillContent.includes("# How to use GitHub tools"), "github skill title present");
+assert.ok(sampleGhSkillContent.includes("repo_overview"), "references repo_overview");
+assert.ok(sampleGhSkillContent.includes("list_repo_files"), "references list_repo_files");
+assert.ok(sampleGhSkillContent.includes("read_repo_file"), "references read_repo_file");
+assert.ok(sampleGhSkillContent.includes("search_repo_code"), "references search_repo_code");
+assert.ok(sampleGhSkillContent.includes("acme/web-frontend"), "includes active frontend repo");
+assert.ok(sampleGhSkillContent.includes("acme/backend-api"), "includes active backend repo");
+
+// Verify activeNotionPages with type, description, id in save_app_config schema
+const { registerConfigTools } = await import("../src/tools/config.js");
+const configServer: any = {
+  registeredTools: new Map<string, any>(),
+  registerTool(name: string, def: any, handler: any) {
+    this.registeredTools.set(name, { def, handler });
+  },
+};
+registerConfigTools(configServer);
+const saveAppTool = configServer.registeredTools.get("save_app_config");
+assert.ok(saveAppTool, "save_app_config tool registered");
+const parsedActivePages = saveAppTool.def.inputSchema.activeNotionPages.parse([
+  {
+    id: "12345678-1234-1234-1234-123456789abc",
+    type: "database",
+    description: "Active sprint database",
+  },
+  {
+    id: "87654321-4321-4321-4321-cba987654321",
+    title: "Product Specs",
+    type: "page",
+    description: "Core product specification page",
+  },
+]);
+assert.equal(parsedActivePages.length, 2);
+assert.equal(parsedActivePages[0].id, "12345678-1234-1234-1234-123456789abc");
+assert.equal(parsedActivePages[0].type, "database");
+assert.equal(parsedActivePages[0].description, "Active sprint database");
+assert.equal(parsedActivePages[0].title, "Untitled");
+assert.equal(parsedActivePages[1].id, "87654321-4321-4321-4321-cba987654321");
+assert.equal(parsedActivePages[1].type, "page");
+assert.equal(parsedActivePages[1].description, "Core product specification page");
+
+const syncGuideTool = configServer.registeredTools.get("config_sync_notion_guide_skill");
+assert.ok(syncGuideTool, "config_sync_notion_guide_skill tool registered");
+
+const { generateDatabaseJsonSchema } = await import("../src/tools/notion.js");
+const generatedJsonSchema = generateDatabaseJsonSchema({
+  title_property: "Task",
+  properties: [
+    { name: "Task", type: "title" },
+    { name: "Status", type: "status", options: [{ name: "Open" }, { name: "Closed" }] },
+    { name: "Progress", type: "formula" },
+  ],
+});
+assert.equal(generatedJsonSchema.type, "object");
+assert.equal(generatedJsonSchema.properties.Task.type, "string");
+assert.deepEqual(generatedJsonSchema.properties.Status.enum, ["Open", "Closed"]);
+assert.equal(generatedJsonSchema.properties.Progress.readOnly, true);
 
 const { getNotionSkillPointId, formatNotionSkillName } = await import(
   "../src/services/vector-db.js"
@@ -345,11 +539,72 @@ assert.equal(envWithUser.CURRENT_USER_NAME, "huong");
 assert.equal(envWithUser.CURRENT_USER_ROLE, "Full Stack Engineer");
 
 // Panel & Skills Component Builder tests
-const { buildPanel, buildSkillsPanel, buildTeamContextSystemPrompt, getDefaultSystemPrompt } = await import("../src/utils/helpers.js");
+const {
+  buildPanel,
+  buildSkillsPanel,
+  buildTeamContextSystemPrompt,
+  getDefaultSystemPrompt,
+  resolveSkillOfConnection,
+  resolveConnectionSkills,
+  buildConnectionSkillName,
+  getConnectionServiceName,
+  isSystemConnection,
+  buildSqlGuideSkillContent,
+} = await import("../src/utils/helpers.js");
+
+// Centralized Connection Skill Name tests
+assert.equal(buildConnectionSkillName("github"), "How to use GitHub tools");
+assert.equal(buildConnectionSkillName("notion"), "How to use Notion tools");
+assert.equal(buildConnectionSkillName("sql"), "How to use SQL Database tools");
+assert.equal(buildConnectionSkillName("slack"), "How to use Slack tools");
+assert.equal(buildConnectionSkillName("custom_crm"), "How to use Custom Crm tools");
+assert.equal(getConnectionServiceName("sql"), "SQL Database");
+assert.equal(getConnectionServiceName("github"), "GitHub");
+assert.equal(getConnectionServiceName("custom_crm"), "Custom Crm");
+
+// System Connection check tests
+assert.equal(isSystemConnection("qdrant"), true);
+assert.equal(isSystemConnection("gemini"), true);
+assert.equal(isSystemConnection("github"), false);
+assert.equal(isSystemConnection("sql"), false);
+
+// Connection Skills Resolver tests
+assert.equal(resolveSkillOfConnection("github")?.skillName, "How to use GitHub tools");
+assert.equal(resolveSkillOfConnection("notion")?.skillName, "How to use Notion tools");
+assert.equal(resolveSkillOfConnection("sql")?.skillName, "How to use SQL Database tools");
+assert.equal(resolveSkillOfConnection("qdrant"), null, "qdrant is system connection");
+assert.equal(resolveSkillOfConnection("gemini"), null, "gemini is system connection");
+assert.equal(resolveSkillOfConnection("unknown_service"), null);
+
+const sqlGuideContent = buildSqlGuideSkillContent();
+assert.ok(sqlGuideContent.includes("# How to use SQL Database tools"));
+assert.ok(sqlGuideContent.includes("sql_get_schema"));
+
+const skillsFromOptions = resolveConnectionSkills(undefined, {
+  activeRepos: [{ name: "my-org/core-api" }],
+  activeNotionPages: [{ id: "db-1", title: "Roadmap" }],
+});
+assert.equal(skillsFromOptions.length, 2);
+assert.equal(skillsFromOptions[0].skillName, "How to use GitHub tools");
+assert.equal(skillsFromOptions[1].skillName, "How to use Notion tools");
+
+const skillsFromConns = resolveConnectionSkills({
+  github: { enabled: true, credentials: { GITHUB_TOKEN: "tok" } },
+  sql: { enabled: true, credentials: { DATABASE_URL: "postgres://..." } },
+  notion: { enabled: false },
+  qdrant: { enabled: true },
+  gemini: { enabled: true },
+});
+assert.equal(skillsFromConns.length, 2, "Should exclude system connections qdrant and gemini");
+assert.equal(skillsFromConns[0].skillName, "How to use GitHub tools");
+assert.equal(skillsFromConns[1].skillName, "How to use SQL Database tools");
+
 const panelHtml = buildPanel("config");
 assert.ok(panelHtml.includes("SkillsComponent"), "buildPanel injects reusable SkillsComponent");
 assert.ok(panelHtml.includes("ExtApps"), "buildPanel inlines ExtApps bundle");
 assert.ok(panelHtml.includes("buildDefaultSystemPrompt"), "buildPanel includes buildDefaultSystemPrompt");
+assert.ok(panelHtml.includes("resolveConnectionSkills"), "buildPanel includes resolveConnectionSkills");
+assert.ok(panelHtml.includes("buildConnectionSkillName"), "buildPanel includes buildConnectionSkillName");
 
 const skillsPanelHtml = buildSkillsPanel();
 assert.ok(skillsPanelHtml.includes("SkillsComponent"), "buildSkillsPanel injects reusable SkillsComponent");
@@ -360,15 +615,49 @@ const generatedPrompt = buildTeamContextSystemPrompt({
   userName: "Alice",
   userRole: "Staff Engineer",
   activeRepos: [{ name: "my-org/core-api", description: "Core backend" }],
-  activeNotionPages: [{ id: "p-1", title: "Architecture RFC" }],
+  activeNotionPages: [
+    { id: "p-1", title: "Architecture RFC", description: "RFC Doc" },
+    { id: "db-1", title: "Sprint Tasks", type: "database", description: "Task Tracker" },
+  ],
 });
+assert.ok(generatedPrompt.includes("You are my assistant helping me automate my work."));
 assert.ok(generatedPrompt.includes("Current User: Alice (Staff Engineer)"));
-assert.ok(generatedPrompt.includes("Active Repositories: my-org/core-api"));
-assert.ok(generatedPrompt.includes("Notion Workspace: All workspace documentation accessible"));
-assert.ok(generatedPrompt.includes("SQL Database Querying: Use `sql_get_schema` and `sql_execute_query`"));
-assert.ok(generatedPrompt.includes("Always ask for explicit user approval before executing any actions that edit or modify data"));
-assert.ok(generatedPrompt.includes("my-team-context-mcp-server"));
+assert.ok(!generatedPrompt.includes("Active Repositories:"), "Should not render active repositories");
+assert.ok(!generatedPrompt.includes("Active Notion Resources:"), "Should not render active notion resources");
+assert.ok(generatedPrompt.includes("Active Connections:"));
+assert.ok(generatedPrompt.includes("- **GitHub**: How to use GitHub tools (use get_skill to get it)"));
+assert.ok(generatedPrompt.includes("- **Notion**: How to use Notion tools (use get_skill to get it)"));
+assert.ok(generatedPrompt.includes("Read through the skill (using `get_skill`) and find the relevant workflow before doing your work."));
 assert.equal(getDefaultSystemPrompt({ userName: "Alice" }), buildTeamContextSystemPrompt({ userName: "Alice" }));
+
+const emptyPrompt = buildTeamContextSystemPrompt({ userName: "Bob" });
+assert.ok(!emptyPrompt.includes("Active Connections:"));
+
+// Test custom connection without a skill, and verify system connections (Qdrant, Gemini) are ignored
+const promptWithCustomAndSystemConns = buildTeamContextSystemPrompt({
+  userName: "Charlie",
+  connections: {
+    github: { enabled: true },
+    qdrant: { enabled: true, credentials: { QDRANT_URL: "http://localhost:6333" } },
+    gemini: { enabled: true, credentials: { GEMINI_API_KEY: "gm-xyz" } },
+    custom_crm: { enabled: true, credentials: { API_KEY: "xyz" } },
+  },
+});
+assert.ok(promptWithCustomAndSystemConns.includes("- **GitHub**: How to use GitHub tools (use get_skill to get it)"));
+assert.ok(promptWithCustomAndSystemConns.includes("- **Custom Crm**"));
+assert.ok(!promptWithCustomAndSystemConns.includes("Custom Crm: How to use"));
+assert.ok(!promptWithCustomAndSystemConns.toLowerCase().includes("qdrant"), "Should ignore Qdrant system connection");
+assert.ok(!promptWithCustomAndSystemConns.toLowerCase().includes("gemini"), "Should ignore Gemini system connection");
+
+// Test prompt with ONLY system connections (Qdrant & Gemini)
+const promptOnlySystemConns = buildTeamContextSystemPrompt({
+  userName: "David",
+  connections: {
+    qdrant: { enabled: true },
+    gemini: { enabled: true },
+  },
+});
+assert.ok(!promptOnlySystemConns.includes("Active Connections:"), "Should keep connections blank when only system connections exist");
 
 // SQL Tools Tests (SQLite file/memory test)
 const testDbPath = path.join(dir, "test.sqlite");

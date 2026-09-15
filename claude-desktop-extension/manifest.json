@@ -1,17 +1,17 @@
 {
   "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
   "manifest_version": "0.4",
-  "name": "my-team-context",
-  "display_name": "My Team Context",
+  "name": "automate-work",
+  "display_name": "Automate Work",
   "version": "0.1.0",
   "description": "Unified team context for Claude: GitHub code, Notion workspace, Qdrant vector knowledge base, SQL databases, and active app configuration.",
   "long_description": "Gives Claude full access to your team's live context: browse and search GitHub code, query Notion documentation and tasks, search and manage shared team skills in Qdrant vector database, execute SQL queries, and configure active repositories and AI system prompt with interactive widgets.\n\nCredentials are authenticated and securely stored in your machine's OS keychain and never exposed in conversations.",
   "author": {
-    "name": "Innostaas",
-    "email": "lucas.luu@innostaas.com"
+    "name": "chauvoluuhuong",
+    "email": "chauvoluuhuong@gmail.com"
   },
   "keywords": [
-    "team-context",
+    "automate-work",
     "github",
     "notion",
     "qdrant",
@@ -33,7 +33,7 @@
   },
   "tools": [
     {
-      "name": "connect_team_context",
+      "name": "init_automate_work",
       "description": "Open settings panel to configure team connections: GitHub token, Notion workspace, Qdrant cluster, SQL database, and Gemini embeddings"
     },
     {
@@ -43,10 +43,6 @@
     {
       "name": "manage_skills",
       "description": "Open interactive skills & knowledge base widget to list, create, edit, delete, and semantically search team skills in Qdrant"
-    },
-    {
-      "name": "team_context_status",
-      "description": "Report connection and authentication status for all team services (GitHub, Notion, Qdrant, SQL, Gemini)"
     },
     {
       "name": "get_app_config",
@@ -101,12 +97,36 @@
       "description": "Test connectivity to Notion workspace"
     },
     {
-      "name": "save_notion_key",
-      "description": "Validate and store Notion internal integration token"
+      "name": "notion_list_resources",
+      "description": "Discover and list accessible pages and databases in the connected Notion workspace"
     },
     {
-      "name": "notion_disconnect",
-      "description": "Remove stored Notion API key from keychain"
+      "name": "notion_get_page",
+      "description": "Fetch full Markdown content and metadata for a Notion page or database"
+    },
+    {
+      "name": "notion_search",
+      "description": "Deep search across Notion database properties, page bodies, and comments"
+    },
+    {
+      "name": "notion_create_page_record",
+      "description": "Create a new record (page) inside a selected Notion database with typed properties and markdown content. Standalone page creation is restricted."
+    },
+    {
+      "name": "notion_update_page",
+      "description": "Update properties and/or append markdown content to an existing Notion page or database record"
+    },
+    {
+      "name": "notion_archive_page",
+      "description": "Archive (soft-delete) or restore an existing Notion page or database record"
+    },
+    {
+      "name": "notion_create_comment",
+      "description": "Add a comment to an existing Notion page or block"
+    },
+    {
+      "name": "notion_get_comments",
+      "description": "Retrieve discussion comments from a Notion page or block"
     },
     {
       "name": "sql_check_connection",

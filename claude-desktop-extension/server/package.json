@@ -1,9 +1,9 @@
 {
-  "name": "my-team-context-mcp-server",
+  "name": "automate-work-mcp-server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "MCP server backing the My Team Context extension",
+  "description": "MCP server backing the Automate Work extension",
   "engines": {
     "node": ">=20"
   },
@@ -13,14 +13,16 @@
     "build:ts": "tsc",
     "build": "npm run build:ts && npm test && npm run validate && npm run build:deps && npm run build:pack && npm install",
     "build:deps": "npm install --omit=dev --no-audit --no-fund",
-    "build:pack": "node -e \"require('node:fs').mkdirSync('../../dist',{recursive:true}); require('node:fs').mkdirSync('../dist',{recursive:true})\" && npx --yes @anthropic-ai/mcpb pack .. ../../dist/my-team-context.mcpb && node -e \"require('node:fs').copyFileSync('../../dist/my-team-context.mcpb', '../dist/my-team-context.mcpb'); require('node:fs').copyFileSync('../../dist/my-team-context.mcpb', '../../dist/my-team-context.pmcp'); require('node:fs').copyFileSync('../../dist/my-team-context.mcpb', '../dist/my-team-context.pmcp')\"",
+    "build:pack": "node -e \"require('node:fs').mkdirSync('../../dist',{recursive:true})\" && npx --yes @anthropic-ai/mcpb pack .. ../../dist/automate-work.mcpb",
     "validate": "npx --yes @anthropic-ai/mcpb validate ../manifest.json",
-    "info": "npx --yes @anthropic-ai/mcpb info ../../dist/my-team-context.mcpb",
+    "info": "npx --yes @anthropic-ai/mcpb info ../../dist/automate-work.mcpb",
     "test": "npx --yes tsx test/api.ts",
+    "test:mention": "npx --yes tsx test/mention-and-refine.ts",
     "smoke": "npx --yes tsx test/smoke.ts",
     "inspect": "npx --yes @modelcontextprotocol/inspector node dist/index.js"
   },
   "dependencies": {
+    "@google/genai": "^2.21.0",
     "@modelcontextprotocol/ext-apps": "^1.7.5",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "mysql2": "^3.24.0",
