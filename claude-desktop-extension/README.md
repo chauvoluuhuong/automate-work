@@ -1,4 +1,4 @@
-# My Team Context
+# Automate Work
 
 > **Bridging the gap between engineering context, product ideation, and collaborative team intelligence in Claude Desktop.**
 
@@ -28,7 +28,7 @@ In modern software teams, critical project context is fragmented across disconne
 
 ## 🚀 The Solution: A Unified Team Context for AI
 
-**My Team Context** transforms Claude Desktop into a fully context-aware team member that bridges engineering reality with product vision.
+**Automate Work** transforms Claude Desktop into a fully context-aware team member that bridges engineering reality with product vision.
 
 ```
        ┌─────────────────────────────────────────────────────────────┐
@@ -86,7 +86,7 @@ In modern software teams, critical project context is fragmented across disconne
 |---|---|---|
 | `configure_app` | `ui://repo-context/config.html` | Multi-select active GitHub repositories with custom context notes, edit team system prompt, and configure integrations. |
 | `manage_skills` | `ui://repo-context/skills.html` | Visual CRUD and semantic search interface for managing shared team skills and guidelines. |
-| `connect_team_context` | `ui://repo-context/panel.html` | Unified credential management and instant connection testing for GitHub, Notion, Qdrant, SQL, and Gemini. |
+| `init_automate_work` | `ui://repo-context/panel.html` | Unified credential management and instant connection testing for GitHub, Notion, Qdrant, SQL, and Gemini. |
 
 ### 2. Team Skills Tools
 
@@ -140,8 +140,8 @@ npm run build:ts
 # Run test suite
 npm test
 
-# Build and bundle Claude Desktop extension (.mcpb & .pmcp)
+# Build and bundle Claude Desktop extension (.mcpb)
 npm run build
 ```
 
-The output bundle is generated at `dist/repo-context.mcpb`.
+The output bundle is generated at `dist/automate-work.mcpb`.
